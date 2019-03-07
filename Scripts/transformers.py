@@ -1,24 +1,73 @@
-
-import json
-import pickle
-import gensim.models as gm
-import re
-import fileinput
 from sklearn.base import TransformerMixin
 from nltk.tokenize import TweetTokenizer
 from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
-from sklearn.linear_model import LogisticRegressionCV
-from sklearn.pipeline import Pipeline, FeatureUnion
-from sklearn.svm import LinearSVC
 from pandas import get_dummies
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import KFold, cross_validate
-from joblib import dump, load
+import numpy as np
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-import csv
 from spacy import load as spacy_load
+from joblib import load
 nlp = spacy_load('en')
+
+class naiveOffensiveWordSimilarity(TransformerMixin):
+    def __init__(self, embeddings, offenseWordList):
+        self.embeddings = embeddings
+        self.offenseWordList = offenseWordList
+        self.offenseWordEmbeddings = []
+        self.oneHotList = get_dummies(offenseWordList)
+        #print(self.oneHotList)
+
+
+    def transform(self, docs):
+        fullList = []
+        for tweet in docs:
+            tweetSimilarity = []
+            tweetVectorList = []
+            for token in TweetTokenizer().tokenize(tweet):
+                try:
+                    tweetVectorList.append(self.embeddings[token])
+                except KeyError:
+                    pass
+
+            if len(tweetVectorList) == 0:
+                tweetVectorList.append([0] * len(self.embeddings['cat']))
+            similarity = cosine_similarity((tweetVectorList), (self.offenseWordEmbeddings))
+
+            tweetSimilarity += list(np.amax(similarity, axis=0))
+            tweetSimilarity += list(np.amin(similarity, axis=0))
+            #tweetSimilarity += list(np.median(similarity, axis=0))
+            fullList.append(tweetSimilarity)
+        return fullList
+
+    def transform2(self, docs, *_):
+        totalFreqList = []
+        twt = TweetTokenizer()
+        for text in docs:
+            categoryTokenList = np.array([0]*len(self.offenseWordList))
+            #oneHotTerms = get_dummies(self.getKMostImportantToken(docs))
+            oneHotTerms = self.oneHotList
+            for token in twt.tokenize(text):
+
+                try:
+                    currToken = np.array(list(oneHotTerms[token]))
+                except KeyError:
+                    currToken = np.array([0]*len(self.offenseWordList))
+                categoryTokenList += currToken
+            categoryTokenList = [int(e>0) for e in categoryTokenList]
+            
+            totalFreqList.append(list(categoryTokenList))
+        return list(totalFreqList)
+
+    def fit(self):
+        for word in self.offenseWordList:
+            try:
+                self.offenseWordEmbeddings.append(self.embeddings[word])
+            except KeyError:
+                pass
+
+    def fit_transform(self, docs):
+        self.fit()
+        ret = self.transform(docs)
+        return ret
 
 
 class posTagExtractor(TransformerMixin):
@@ -27,6 +76,7 @@ class posTagExtractor(TransformerMixin):
         self.taggedDocuments = self.transformToPosTags(documents)
         self.trainLabels = labels
         self.vectorizer = CountVectorizer(ngram_range=(1,3))
+  
 
     def transformToPosTags(self, docs):
         for doc in docs:
@@ -163,73 +213,6 @@ class frequencyFilter(TransformerMixin):
         self.fit(X, y)
         return self.transform(X)
 
-class naiveOffensiveWordSimilarity(TransformerMixin):
-    def __init__(self, embeddings, offenseWordList):
-        self.embeddings = embeddings
-        self.offenseWordList = offenseWordList
-        self.offenseWordEmbeddings = []
-        self.oneHotList = get_dummies(offenseWordList)
-        #print(self.oneHotList)
-
-
-    def transform(self, docs):
-        fullList = []
-        for tweet in docs:
-            tweetSimilarity = []
-            tweetVectorList = []
-            for token in TweetTokenizer().tokenize(tweet):
-                try:
-                    tweetVectorList.append(self.embeddings[token])
-                except KeyError:
-                    pass
-
-            #print("-----------")
-            #print(len(tweetVectorList))
-            #print(len(self.offenseWordEmbeddings))
-            if len(tweetVectorList) == 0:
-                tweetVectorList.append([0] * len(self.embeddings['cat']))
-            similarity = cosine_similarity((tweetVectorList), (self.offenseWordEmbeddings))
-            #print((similarity[0][0]))
-            #tweetSimilarity += list(np.average(similarity, axis=0))
-            tweetSimilarity += list(np.amax(similarity, axis=0))
-            tweetSimilarity += list(np.amin(similarity, axis=0))
-            #tweetSimilarity += list(np.median(similarity, axis=0))
-            fullList.append(tweetSimilarity)
-        
-        s = StandardScaler()
-        return fullList
-
-    def transform2(self, docs, *_):
-        totalFreqList = []
-        twt = TweetTokenizer()
-        for text in docs:
-            categoryTokenList = np.array([0]*len(self.offenseWordList))
-            #oneHotTerms = get_dummies(self.getKMostImportantToken(docs))
-            oneHotTerms = self.oneHotList
-            for token in twt.tokenize(text):
-
-                try:
-                    currToken = np.array(list(oneHotTerms[token]))
-                except KeyError:
-                    currToken = np.array([0]*len(self.offenseWordList))
-                categoryTokenList += currToken
-            categoryTokenList = [int(e>0) for e in categoryTokenList]
-            
-            totalFreqList.append(list(categoryTokenList))
-        return list(totalFreqList)
-
-    def fit(self):
-        for word in self.offenseWordList:
-            try:
-                self.offenseWordEmbeddings.append(self.embeddings[word])
-            except KeyError:
-                pass
-
-    def fit_transform(self, docs):
-        self.fit()
-        ret = self.transform(docs)
-        return ret
-
 class linguisticFeatureExtractor(TransformerMixin):
     def __init__(self):
         print("inititalizing linguistic feature extractor")
@@ -284,13 +267,7 @@ class linguisticFeatureExtractor(TransformerMixin):
                     depVector += np.array(list(currlist))
             sentVector = np.divide(sentVector, len(text))
             complexityVector = np.divide(complexityVector, len(text))
-            # print("pos list is ")
-            # print(posVector)
-            # print("sentiment is ")
-            # print(sentVector)
-            # print("complexity is ")
-            # print(complexityVector)
-            # print("appending ")
+
             toAppend = np.concatenate((posVector, posNGramVector, sentVector, lemmaVector, complexityVector, depVector))
             ##print(toAppend)
             returnList.append(toAppend)
@@ -305,95 +282,22 @@ class linguisticFeatureExtractor(TransformerMixin):
     def fit_transform(self, X, Y):
         return self.transform(X)
 
-def read_corpus(corpus_file, binary=True):
-    '''Reading in data from corpus file'''
-    ids = []
-    tweets = []
-    #labels = []
-    with open(corpus_file, 'r', encoding='utf-8') as fi:
-        for line in fi:
-            data = line.strip().split('\t')
-            # making sure no missing labels
-            if len(data) != 2:
-                raise IndexError('Missing data for tweet "%s"' % data[0])
 
-            ids.append(data[0])
-
-
-            tweets.append(data[1])
-            #labels.append(data[2])
-    #print(ids[1:20])
-    #print(tweets[1:20])
-    #print(labels[1:20])
-    return ids[1:], tweets[1:]
-
-
-def load_embeddings(embedding_file):
-    '''
-    loading embeddings from file
-    input: embeddings stored as txt
-    output: embeddings in a dict-like structure available for look-up, vocab covered by the embeddings as a set
-    '''
-
-    print ("Loading Glove Model")
-    f = open(embedding_file,'r')
-    model = {}
-    vocab = []
-    for line in f:
-        splitLine = line.split()
-        word = splitLine[0]
-        embedding = np.array([float(val) for val in splitLine[1:]])
-        model[word] = embedding
-        vocab.append(word)
-    print ("Done.",len(model)," words loaded!")
-    return model, vocab
-
-
-def load_offense_words(path):
-    ow = []
-    f = open(path, "r") 
-    for line in f:
-        ow.append(line[:-1])
-    return ow
-
+class EnsembleVectorizer(TransformerMixin):
+    def __init__(self, pathList):
+        self.models = [load(p) for p in pathList]
+        print("Ensemble vectorizer loaded all models")
     
-def createSubmission(path, ids, predictions):
-    with open(path, 'w', newline='') as csvfile:
-        for index in range(len(ids)):
-            pred = str(predictions[index])
-            csvfile.write(str(ids[index] + "," + pred + "\n"))
-
-
-offenseval_test = '/Users/balinthompot/RUG/Honours/HateSpeech/offenseval-rug-master/Data/test/testset-taska.tsv'
-#offenseval_test = '/Users/balinthompot/RUG/Honours/HateSpeech/offenseval-rug-master/Data/train/offenseval-training-v1.tsv'
-path_to_embs = '/Users/balinthompot/RUG/Honours/HateSpeech/offenseval-rug-master/Resources/glove.twitter.27B.200d.txt'
-
-offense_words = '/Users/balinthompot/RUG/Honours/HateSpeech/offenseval-rug-master/Resources/offensive_words_eng.txt'
-embeddings, vocab = load_embeddings(path_to_embs)
-offensiveWords = load_offense_words(offense_words)
-
-transformer = naiveOffensiveWordSimilarity(embeddings, offensiveWords)
-
-
-X_IDs, Xtest_raw = read_corpus(offenseval_test)
-
-vectors = transformer.fit_transform(Xtest_raw)
-
-print("creating submission for the naive model")
-modelPath = '././NaiveSVC.joblib'
-model = load(modelPath)
-#print(model.score(vectors, Y_test_dev))
-predictions = model.predict(vectors)
-createSubmission("RUG_Offense_Naive_SVC_taskA.csv", X_IDs, predictions)
-
-print("creating submission for the concat model")
-modelPath = '././RUG_Offense_concatModel.joblib'
-model = load(modelPath)
-#print(model.score(Xtest_raw, Y_test_dev))
-predictions = model.predict(Xtest_raw)
-createSubmission("RUG_Offense_concatModel_practice_taskA.csv", X_IDs, predictions)
-
-
-
-
-
+    def transform(self, X):
+        ret = []
+        
+        for tweet in X:
+            vector = []
+            for m in self.models:
+                pred = m.predict([tweet])[0]
+                if pred == 'OFF':
+                    vector.append(1)
+                else:
+                    vector.append(0)
+            ret.append(vector)
+        return ret

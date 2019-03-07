@@ -1,36 +1,31 @@
-'''
-SVM systems for offenseval
-'''
-import argparse
-import re
-import statistics as stats
-import stop_words
+
 import json
 import pickle
 import gensim.models as gm
-
-
-import features
+import re
+import fileinput
 from sklearn.base import TransformerMixin
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import KFold, cross_validate
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.svm import LinearSVC
-from sklearn.svm import SVC
-from sklearn.pipeline import Pipeline, FeatureUnion
-from sklearn.utils import shuffle
-from sklearn.preprocessing import StandardScaler
-from sklearn.base import TransformerMixin
-from itertools import combinations
-
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import confusion_matrix
-from sklearn.metrics import precision_recall_fscore_support
+from nltk.tokenize import TweetTokenizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-from nltk.tokenize import TweetTokenizer
+from sklearn.linear_model import LogisticRegressionCV
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.svm import LinearSVC
 from pandas import get_dummies
-from joblib import dump
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import KFold, cross_validate
+from joblib import dump, load
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+import csv
+from spacy import load as spacy_load
+nlp = spacy_load('en')
+
+
+##### SET THE MODEL(S) ON WHICH WE WANT TO PREDICT ##################
+predictOnNaiveModel = True
+predictOnConcatModel = False
+predictOnEnsembleModel = False
+######################################################################
 
 class posTagExtractor(TransformerMixin):
     def __init__(self, documents, labels):
@@ -320,23 +315,24 @@ def read_corpus(corpus_file, binary=True):
     '''Reading in data from corpus file'''
     ids = []
     tweets = []
-    labels = []
+    #labels = []
     with open(corpus_file, 'r', encoding='utf-8') as fi:
         for line in fi:
             data = line.strip().split('\t')
             # making sure no missing labels
-            if len(data) != 5:
+            if len(data) != 2:
                 raise IndexError('Missing data for tweet "%s"' % data[0])
 
             ids.append(data[0])
 
 
             tweets.append(data[1])
-            labels.append(data[2])
+            #labels.append(data[2])
     #print(ids[1:20])
     #print(tweets[1:20])
     #print(labels[1:20])
-    return ids[1:], tweets[1:], labels[1:]
+    return ids[1:], tweets[1:]
+
 
 def load_embeddings(embedding_file):
     '''
@@ -358,263 +354,59 @@ def load_embeddings(embedding_file):
     print ("Done.",len(model)," words loaded!")
     return model, vocab
 
-def clean_samples(samples):
-    '''
-    Simple cleaning: removing URLs, line breaks, abstracting away from user names etc.
-    '''
 
-    new_samples = []
-    for tw in samples:
-
-        tw = re.sub(r'@\S+','User', tw)
-        tw = re.sub(r'\|LBR\|', '', tw)
-        tw = re.sub(r'http\S+\s?', '', tw)
-        tw = re.sub(r'\#', '', tw)
-        new_samples.append(tw)
-
-    return new_samples
-
-def evaluate(Ygold, Yguess):
-    '''Evaluating model performance and printing out scores in readable way'''
-    labs = sorted(set(Ygold + Yguess.tolist()))
-    """ print('-'*50)
-    print("Accuracy:", accuracy_score(Ygold, Yguess))
-    print('-'*50)
-    print("Precision, recall and F-score per class:") """
-
-    # get all labels in sorted way
-    # Ygold is a regular list while Yguess is a numpy array
-
-
-
-    # printing out precision, recall, f-score for each class in easily readable way
-    PRFS = precision_recall_fscore_support(Ygold, Yguess, labels=labs)
-    """ print('{:10s} {:>10s} {:>10s} {:>10s}'.format("", "Precision", "Recall", "F-score"))
-    for idx, label in enumerate(labs):
-        print("{0:10s} {1:10f} {2:10f} {3:10f}".format(label, PRFS[0][idx],PRFS[1][idx],PRFS[2][idx]))
-
-    print('-'*50)
-    print("Average (macro) F-score:", stats.mean(PRFS[2]))
-    print('-'*50)
-    print('Confusion matrix:')
-    print('Labels:', labs)
-    print(confusion_matrix(Ygold, Yguess, labels=labs))
-    print() """
-
-    return [PRFS, labs]
-
-
-def runFitting(params, objects):
-
-    TASK = 'binary'
-    #TASK = 'multi'
-
-    '''
-    Preparing data
-    '''
-
-    featureList = []
-
-    if params["sentenceComplexityCheck"]:
-        featureList.append("posTag")
-    if params["embeddingsTermFreqFiltering"]:
-        objects["freqFilter"].embeddingsEnabled = True
-    if params["oneHotTermFreqFiltering"]:
-        objects["freqFilter"].oneHotEnabled = True
-
-
-
-    objects["liguisticFeatureExtractor"].setFeatureList(featureList)
-    offenseval_train = '/Users/balinthompot/RUG/Honours/HateSpeech/offenseval-rug-master/Data/train/offenseval-training-v1.tsv'
-    offenseval_test = '/Users/balinthompot/RUG/Honours/HateSpeech/offenseval-rug-master/Data/train/agr_en_dev.csv'
-
-    #print('Reading in offenseval training data...')
-    if TASK == 'binary':
-        IDsTrain, Xtrain,Ytrain = read_corpus(offenseval_train)
-    else:
-        IDsTrain, Xtrain,Ytrain = read_corpus(offenseval_train, binary=False)
+def load_offense_words(path):
+    ow = []
+    f = open(path, "r") 
+    for line in f:
+        ow.append(line[:-1])
+    return ow
 
     
+def createSubmission(path, ids, predictions):
+    with open(path, 'w', newline='') as csvfile:
+        for index in range(len(ids)):
+            pred = str(predictions[index])
+            csvfile.write(str(ids[index] + "," + pred + "\n"))
 
 
-    #print('Reading in Test data...')
-    #print('Reading in Test data...')
+offenseval_test = './test/testset-taska.tsv'
+path_to_embs = './Resources/glove.twitter.27B.200d.txt'
 
-    #Xtest_raw, Y_test_dev = read_corpus(offenseval_test)
-
-    #Xtrain = Xtrain + Xtest_raw
-    #Ytrain = Ytrain + Y_test_dev
-    # Minimal preprocessing / cleaning
-
-    Xtrain = clean_samples(Xtrain)
-    #print(len(Xtrain))
-    #print(len(Xtrain) * 0.9)
-    #cutoff = int(len(Xtrain)*0.9)
-
-    #Xtest_raw = Xtrain[cutoff:]
-    #Xtrain = Xtrain[:cutoff]
-
-    #X_test_dev_labels = []
-    #Y_test = Ytrain[cutoff:]
-    #Ytrain = Ytrain[:cutoff]
-    #Xtest = clean_samples(Xtest_raw)
-
-    #print(len(Xtrain), 'training samples!')
-    #print(len(Xtest), 'test samples!')
-
-
-    '''
-    Preparing vectorizer and classifier
-    '''
-
-    # Vectorizing data / Extracting features
-    #print('Preparing tools (vectorizer, classifier) ...')
-    if params["tweetTokenization"]:
-        count_word = CountVectorizer(ngram_range=(1,2), stop_words=stop_words.get_stop_words('de'), tokenizer=TweetTokenizer().tokenize)
-    else:
-        count_word = CountVectorizer(ngram_range=(1,2), stop_words=stop_words.get_stop_words('de'))
-    count_char = CountVectorizer(analyzer='char', ngram_range=(3,7))
-
-    
-
-    #test = (count_word.fit_transform(Xtrain))
-    #print(count_word.vocabulary_)
-
-    # Getting embeddings
-    
-    embedder = features.Embeddings(objects["embeddings"], pool='max')
-
-    vectorizer = FeatureUnion([('word', count_word),
-                                ('char', count_char),
-                                ('word_embeds', embedder )])
-    
-    if len(featureList) > 0:
-        vectorizer.transformer_list.append(('lingFeats', objects["liguisticFeatureExtractor"]))
-
-    if params["oneHotTermFreqFiltering"] or params["embeddingsTermFreqFiltering"]:
-        vectorizer.transformer_list.append(('freqFilter', objects["freqFilter"]))
-
-    if params["charNgramFreqFiltering"]:
-        objects["charFreqFilter"].oneHotEnabled = True
-        objects["charFreqFilter"].embeddingsEnabled = False
-        vectorizer.transformer_list.append(('charfreqFilter', objects["charFreqFilter"]))
-
-    if params["POStagCheck"]:
-        vectorizer.transformer_list.append(('posTagger', posTagExtractor(Xtrain, Ytrain)))
-
-    # Set up SVM classifier with unbalanced class weights
-    """     if TASK == 'binary':
-        # cl_weights_binary = None
-        cl_weights_binary = {'OTHER':1, 'OFFENSE':10}
-        clf = LinearSVC(class_weight=cl_weights_binary)
-    else:
-        # cl_weights_multi = None
-        cl_weights_multi = {'OTHER':0.5,
-                            'ABUSE':3,
-                            'INSULT':3,
-                            'PROFANITY':4}
-        clf = LinearSVC(class_weight=cl_weights_multi) """
-    clf = LinearSVC()
-    #scaler = StandardScaler(with_mean=False)
-
-    classifier = Pipeline([
-                            ('vectorize', vectorizer),
-                            #('scale', scaler),
-                            ('classify', clf)])
-
-
-    
-
-
-    '''
-    Actual training and predicting:
-    '''
-
-
-    ### predicting on set aside training data
-    #print('Predicting on set aside data...')
-    #Yguess = classifier.predict(XcustomTest)
-    #result = cross_validate(classifier, Xtrain, Ytrain,cv=3)
-    #print(result)
-    ########
-
-    print('Fitting on training data...')
-    classifier.fit(Xtrain, Ytrain)
-    #print('accuracy on set aside')
-    #print(classifier.score(Xtest_raw, Y_test))
-    #exit()
-
-    #print('Predicting...')
-    #Yguess = classifier.predict(Xtest)
-
-
-    """     '''
-    Outputting in format required
-    '''
-
-    print('Outputting predictions...')
-
-    outdir = '/Users/balinthompot/RUG/Honours/HateSpeech/offenseval-rug-master/Submission'
-    fname = 'rug_fine_2.txt'
-
-    with open(outdir + '/' + fname, 'w', encoding='utf-8') as fo:
-        assert len(Yguess) == len(Xtest_raw), 'Unequal length between samples and predictions!'
-        for idx in range(len(Yguess)):
-            # print(Xtest_raw[idx] + '\t' + Yguess[idx] + '\t' + 'XXX', file=fo) # binary task (coarse)
-            print(Xtest_raw[idx] + '\t' + 'XXX' + '\t' + Yguess[idx], file=fo) # multi task (fine)
-
-    print('Done.')
-    """
-    return classifier
-
-
-def mean(list):
-    return sum(list)/len(list)
-
-
-#######
-from spacy import load as spacy_load
-nlp = spacy_load('en')
-path_to_embs = '/Users/balinthompot/RUG/Honours/HateSpeech/offenseval-rug-master/Resources/glove.twitter.27B.200d.txt'
-# path_to_embs = 'embeddings/model_reset_random.bin'
-#print('Getting pretrained word embeddings from {}...'.format(path_to_embs))
+offense_words = './Resources/offensive_words_eng.txt'
 embeddings, vocab = load_embeddings(path_to_embs)
-#print('Done')
+print("prediction script: embeddings loaded")
+offensiveWords = load_offense_words(offense_words)
+print("prediction script: offensive words loaded")
 
-print("starting")
-params = {
-    "tweetTokenization" : False, 
-    "POStagCheck": False,
-    "oneHotTermFreqFiltering": False, 
-    "charNgramFreqFiltering": False,
-    "sentenceComplexityCheck": False,
-    "embeddingsTermFreqFiltering": False, 
-    
-}
-objects = {
-    "liguisticFeatureExtractor": linguisticFeatureExtractor(),
-    "embeddings": embeddings,
-    "freqFilter": frequencyFilter(1500, embeddings, "word", 1, 1),
-    "charFreqFilter" : frequencyFilter(3200, embeddings, "char", 3, 7)
-}
-print("results of original parameters:")
-resAndModel = runFitting(params, objects)
-#bestres = mean(resAndModel[0]['test_score'])
-bestModel = resAndModel
-bestparams = params.copy() 
-dump(bestModel, "RUG_Offense_originalModel.joblib")
-#print(bestres)
-allResults = {}
-#bestres = 0
-for key, val in params.items():
+if predictOnNaiveModel:
 
-    params[key] = True
-    print("parameters: ")
-    print(params)
+    transformer = naiveOffensiveWordSimilarity(embeddings, offensiveWords)
+    X_IDs, Xtest_raw = read_corpus(offenseval_test)
+    vectors = transformer.fit_transform(Xtest_raw)
+    print("creating submission for the naive model")
+    modelPath = './Models/NaiveSVC.joblib'
+    model = load(modelPath)
+    #print(model.score(vectors, Y_test_dev))
+    predictions = model.predict(vectors)
+    createSubmission("RUG_Offense_Naive_SVC_taskA.csv", X_IDs, predictions)
 
-    resAndModel = runFitting(params, objects)
-    print("finished " + str(key))
-    dump(resAndModel, "RUG_Offense_" +str(key) + ".joblib")
-    params[key] = False
+if predictOnConcatModel:
+
+    print("creating submission for the concat model")
+    modelPath = './Models/RUG_Offense_concatModel.joblib'
+    model = load(modelPath)
+    #print(model.score(Xtest_raw, Y_test_dev))
+    predictions = model.predict(Xtest_raw)
+    createSubmission("RUG_Offense_concatModel_taskA.csv", X_IDs, predictions)
+
+if predictOnEnsembleModel:
+
+    print("creating submission for the ensemble model")
+    modelPath = './Models/RUG_Offense_ensembleModel.joblib'
+    model = load(modelPath)
+    #print(model.score(Xtest_raw, Y_test_dev))
+    predictions = model.predict(Xtest_raw)
+    createSubmission("RUG_Offense_ensembleModel_taskA.csv", X_IDs, predictions)
 
 
