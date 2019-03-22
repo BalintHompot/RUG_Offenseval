@@ -62,9 +62,9 @@ def runFitting(params, objects):
     # Vectorizing data / Extracting features
     #print('Preparing tools (vectorizer, classifier) ...')
     if params["tweetTokenization"]:
-        count_word = transformers.CountVectorizer(ngram_range=(1,2), stop_words=stop_words.get_stop_words('de'), tokenizer=TweetTokenizer().tokenize)
+        count_word = transformers.CountVectorizer(ngram_range=(1,2), stop_words=stop_words.get_stop_words('en'), tokenizer=TweetTokenizer().tokenize)
     else:
-        count_word = transformers.CountVectorizer(ngram_range=(1,2), stop_words=stop_words.get_stop_words('de'))
+        count_word = transformers.CountVectorizer(ngram_range=(1,2), stop_words=stop_words.get_stop_words('en'))
     count_char = transformers.CountVectorizer(analyzer='char', ngram_range=(3,7))
 
     
@@ -124,8 +124,9 @@ def runFitting(params, objects):
     ### predicting on set aside training data
     #print('Predicting on set aside data...')
     #Yguess = classifier.predict(XcustomTest)
-    #result = cross_validate(classifier, Xtrain, Ytrain,cv=10)
-    #print(result)
+    print("cross validating")
+    result = cross_validate(classifier, Xtrain, Ytrain,cv=10)
+    print(result)
     ########
 
     #print('Predicting...')
@@ -184,6 +185,7 @@ objects = {
 }
 print("results of original parameters:")
 resAndModel = runFitting(params, objects)
+dump(resAndModel, "./Models/SVM_concat.joblib")
 
 
 

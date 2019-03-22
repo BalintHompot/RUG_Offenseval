@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import precision_recall_fscore_support
+from random import shuffle
 
 def read_corpus_otherSet(corpus_file, binary=True):
     '''Reading in data from corpus file'''
@@ -38,6 +39,33 @@ def read_corpus_otherSet(corpus_file, binary=True):
     #print(labels)
     print("read " + str(len(tweets)) + " tweets.")
     return tweets, labels
+
+def read_corpus_WaseemHovy(corpus_file):
+    '''Reading in data from corpus file'''
+    ids = []
+    tweets = []
+    labels = []
+    with open(corpus_file, 'r', encoding='ISO-8859-1') as fi:
+        for line in fi:
+            data = line.strip().split(',')
+            ids.append(data[0])
+            if len(data)<3:
+                continue
+            if len(data)>3:
+                tweets.append("".join(data[1:len(data) - 2]))
+            else:
+                tweets.append(data[1])
+            if data[len(data)-1] == 'none':
+                labels.append('NOT')
+            else:
+                labels.append('OFF')
+    mapIndexPosition = list(zip(ids, tweets, labels))
+    shuffle(mapIndexPosition)
+    ids, tweets, labels = zip(*mapIndexPosition)
+    #print(ids[1:20])
+    #print(tweets[1:20])
+    #print(labels[1:20])
+    return ids, tweets, labels
 
 def read_corpus(corpus_file, binary=True):
     '''Reading in data from corpus file'''
