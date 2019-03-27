@@ -122,6 +122,8 @@ def clean_samples(samples):
         tw = re.sub(r'\|LBR\|', '', tw)
         tw = re.sub(r'http\S+\s?', '', tw)
         tw = re.sub(r'\#', '', tw)
+        tw = re.sub(r'&39;', '\'', tw)
+            
         new_samples.append(tw)
 
     return new_samples

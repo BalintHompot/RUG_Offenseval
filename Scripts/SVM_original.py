@@ -61,6 +61,7 @@ if __name__ == '__main__':
 
     # Minimal preprocessing / cleaning
     Xtrain = helperFunctions.clean_samples(Xtrain)
+    print(Xtrain[1:30])
 
     print(len(Xtrain), 'training samples!')
     '''
